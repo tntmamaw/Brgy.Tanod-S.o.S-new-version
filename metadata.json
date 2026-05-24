@@ -1,0 +1,6 @@
+{
+  "name": "Barangay Tanod S.O.S",
+  "description": "Premium real-time emergency response system for Philippine Barangays with AI assistance and live tracking.",
+  "requestFramePermissions": ["geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

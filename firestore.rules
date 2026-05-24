@@ -1,0 +1,104 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 1. Global Denial
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- PRIMITIVES ---
+    function isSignedIn() { return request.auth != null; }
+    function isVerified() { return isSignedIn() && request.auth.token.email_verified == true; }
+    function incoming() { return request.resource.data; }
+    function existing() { return resource.data; }
+    function isValidId(id) { return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$'); }
+    
+    // Auth-based checks
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    
+    // Role-based checks (Requires DB lookup)
+    function getUserRole(uid) {
+      return get(/databases/$(database)/documents/users/$(uid)).data.role;
+    }
+    function isAdmin() { 
+      return isSignedIn() && (
+        request.auth.token.email == 'liezlynsuyod28@gmail.com' ||
+        getUserRole(request.auth.uid) == 'Admin'
+      );
+    }
+    function isTanod() {
+      return isSignedIn() && getUserRole(request.auth.uid) == 'Tanod';
+    }
+
+    // --- VALIDATION HELPERS ---
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt', 'displayName']) &&
+             data.uid is string && data.uid.size() <= 64 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role in ['Resident', 'Tanod', 'Admin'] &&
+             data.displayName is string && data.displayName.size() <= 64;
+    }
+
+    function isValidIncident(data) {
+      return data.keys().hasAll(['reporterId', 'reporterName', 'type', 'description', 'location', 'status', 'createdAt', 'updatedAt', 'assignedTanods']) &&
+             data.reporterId is string && data.reporterId.size() <= 64 &&
+             data.type is string && data.type.size() <= 100 &&
+             data.description is string && data.description.size() <= 1000 &&
+             data.status in ['Pending', 'Responding', 'Resolved'] &&
+             data.location.latitude is number && data.location.longitude is number &&
+             data.assignedTanods is list;
+    }
+
+    function isValidAnnouncement(data) {
+      return data.keys().hasAll(['title', 'content', 'authorId', 'createdAt']) &&
+             data.title is string && data.title.size() <= 200 &&
+             data.content is string && data.content.size() <= 5000 &&
+             data.authorId is string;
+    }
+
+    // --- COLLECTIONS ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isAdmin() || isTanod(); // Tanods need to see active colleagues
+      
+      allow create: if isOwner(userId) && isValidUser(incoming()) && incoming().role == 'Resident'; // Only residents can self-register
+      
+      allow update: if isOwner(userId) && (
+        // Residents updating status/phone
+        (incoming().diff(existing()).affectedKeys().hasOnly(['status', 'phoneNumber', 'lastLocation', 'displayName'])) ||
+        // Tanods updating location
+        (isTanod() && incoming().diff(existing()).affectedKeys().hasOnly(['lastLocation', 'status']))
+      ) && isValidUser(incoming());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /incidents/{incidentId} {
+      allow read: if isSignedIn();
+      allow list: if isSignedIn();
+      
+      allow create: if isSignedIn() && 
+                    isValidIncident(incoming()) && 
+                    incoming().reporterId == request.auth.uid &&
+                    incoming().status == 'Pending';
+      
+      allow update: if isSignedIn() && (
+        // Action: Respond (Tanod only)
+        (isTanod() && existing().status == 'Pending' && incoming().status == 'Responding' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'assignedTanods', 'updatedAt'])) ||
+        // Action: Resolve (Tanod or Admin)
+        ((isTanod() || isAdmin()) && incoming().status == 'Resolved' && incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt']))
+      ) && isValidIncident(incoming());
+      
+      allow delete: if isAdmin();
+    }
+
+    match /announcements/{announcementId} {
+      allow read, list: if isSignedIn();
+      allow write: if isAdmin() && isValidAnnouncement(incoming());
+    }
+
+    // interaction markers or other subcollections can go here
+  }
+}

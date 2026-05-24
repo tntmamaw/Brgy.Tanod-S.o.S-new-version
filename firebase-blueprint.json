@@ -1,0 +1,82 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Represents a user in the system (Resident, Tanod, or Admin).",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "role": { "type": "string", "enum": ["Resident", "Tanod", "Admin"] },
+        "phoneNumber": { "type": "string" },
+        "status": { "type": "string", "description": "e.g., 'Available', 'On Duty', 'Busy'" },
+        "lastLocation": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "timestamp": { "type": "string", "format": "date-time" }
+          }
+        },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Incident": {
+      "title": "Incident",
+      "description": "Represents an SOS alert or emergency incident.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reporterId": { "type": "string" },
+        "reporterName": { "type": "string" },
+        "type": { "type": "string" },
+        "description": { "type": "string" },
+        "location": {
+          "type": "object",
+          "properties": {
+            "latitude": { "type": "number" },
+            "longitude": { "type": "number" },
+            "address": { "type": "string" }
+          }
+        },
+        "status": { "type": "string", "enum": ["Pending", "Responding", "Resolved"] },
+        "assignedTanods": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["reporterId", "status", "location", "createdAt"]
+    },
+    "Announcement": {
+      "title": "Announcement",
+      "description": "Official announcements from the Barangay Admin.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "title": { "type": "string" },
+        "content": { "type": "string" },
+        "authorId": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["title", "content", "authorId", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and real-time location data."
+    },
+    "/incidents/{incidentId}": {
+      "schema": "Incident",
+      "description": "Active and historical SOS incidents."
+    },
+    "/announcements/{announcementId}": {
+      "schema": "Announcement",
+      "description": "Public announcements for residents."
+    }
+  }
+}
