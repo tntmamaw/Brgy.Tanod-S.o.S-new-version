@@ -4,7 +4,9 @@ import 'leaflet/dist/leaflet.css';
 import L from 'leaflet';
 
 // Fix for default marker icons in Leaflet + Vite
+// @ts-ignore
 import icon from 'leaflet/dist/images/marker-icon.png';
+// @ts-ignore
 import iconShadow from 'leaflet/dist/images/marker-shadow.png';
 
 let DefaultIcon = L.icon({

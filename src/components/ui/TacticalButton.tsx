@@ -1,12 +1,11 @@
 import React from 'react';
 import { cn } from '@/src/lib/utils';
 
-interface TacticalButtonProps extends React.ButtonHTMLAttributes<HTMLButtonElement> {
+export type TacticalButtonProps = React.ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: 'cyan' | 'red' | 'gray' | 'outline';
   size?: 'sm' | 'md' | 'lg';
   glow?: boolean;
-  children?: React.ReactNode;
-}
+};
 
 export function TacticalButton({ 
   className, 

@@ -19,7 +19,7 @@ interface SidebarItemProps {
   active?: boolean;
   onClick?: () => void;
   badge?: string;
-  itemId: string;
+  key?: string | number;
 }
 
 function SidebarItem({ icon: Icon, label, active, onClick, badge }: SidebarItemProps) {
@@ -101,7 +101,6 @@ export function TacticalSidebar({ isOpen, onClose }: { isOpen: boolean, onClose:
             {filteredItems.map((item) => (
               <SidebarItem 
                 key={item.id}
-                itemId={item.id}
                 icon={item.icon} 
                 label={item.label} 
                 active={item.id === 'command'} // Temporary

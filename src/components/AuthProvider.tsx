@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut, User } from 'firebase/auth';
+import { onAuthStateChanged, signInWithPopup, GoogleAuthProvider, signOut as firebaseSignOut, signInWithEmailAndPassword, User } from 'firebase/auth';
 import { doc, getDoc, setDoc } from 'firebase/firestore';
 import { auth, db } from '@/src/lib/firebase';
 import { UserProfile, UserRole } from '@/src/types';
@@ -8,8 +8,8 @@ import { handleFirestoreError, OperationType } from '@/src/lib/error-handler';
 interface AuthContextType {
   user: UserProfile | null;
   loading: boolean;
-  login: () => Promise<void>;
-  logout: () => Promise<void>;
+  signIn: (email?: string, password?: string) => Promise<void>;
+  signOut: () => Promise<void>;
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -30,7 +30,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const newUser: UserProfile = {
               uid: firebaseUser.uid,
               email: firebaseUser.email || '',
-              displayName: firebaseUser.displayName || 'Resident',
+              displayName: firebaseUser.displayName || firebaseUser.email?.split('@')[0] || 'Resident',
               role: 'Resident',
               createdAt: new Date().toISOString(),
               status: 'Available'
@@ -38,8 +38,17 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             await setDoc(doc(db, 'users', firebaseUser.uid), newUser);
             setUser(newUser);
           }
-        } catch (error) {
-          handleFirestoreError(error, OperationType.GET, `users/${firebaseUser.uid}`);
+        } catch (error: any) {
+          console.warn('Failed to load user profile (offline mode fallback activated):', error);
+          // Fallback user state so app can function locally offline
+          setUser({
+            uid: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            displayName: firebaseUser.displayName || 'Offline User',
+            role: 'Resident',
+            createdAt: new Date().toISOString(),
+            status: 'Available'
+          });
         }
       } else {
         setUser(null);
@@ -50,25 +59,30 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     return () => unsubscribe();
   }, []);
 
-  const login = async () => {
-    const provider = new GoogleAuthProvider();
+  const signIn = async (email?: string, password?: string) => {
     try {
-      await signInWithPopup(auth, provider);
+      if (email && password) {
+        await signInWithEmailAndPassword(auth, email, password);
+      } else {
+        const provider = new GoogleAuthProvider();
+        await signInWithPopup(auth, provider);
+      }
     } catch (error) {
       console.error("Login failed:", error);
+      throw error;
     }
   };
 
-  const logout = async () => {
+  const signOut = async () => {
     try {
-      await signOut(auth);
+      await firebaseSignOut(auth);
     } catch (error) {
       console.error("Logout failed:", error);
     }
   };
 
   return (
-    <AuthContext.Provider value={{ user, loading, login, logout }}>
+    <AuthContext.Provider value={{ user, loading, signIn, signOut }}>
       {children}
     </AuthContext.Provider>
   );

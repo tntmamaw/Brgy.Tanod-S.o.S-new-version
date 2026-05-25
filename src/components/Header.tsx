@@ -5,7 +5,7 @@ import { motion } from 'motion/react';
 import { GlassCard } from './ui/GlassCard';
 
 export function Header() {
-  const { user, logout } = useAuth();
+  const { user, signOut } = useAuth();
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 px-4 py-4">
@@ -45,7 +45,7 @@ export function Header() {
             </div>
 
             <button 
-              onClick={logout}
+              onClick={signOut}
               className="p-2 text-gray-400 hover:text-red-600 hover:bg-red-50 rounded-xl transition-all"
             >
               <LogOut className="w-6 h-6" />
