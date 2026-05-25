@@ -5,6 +5,14 @@
 
 export type UserRole = 'Resident' | 'Tanod' | 'Admin';
 
+export enum EmergencyType {
+  MEDICAL = 'Medical Emergency',
+  CRIME = 'Criminal Activity',
+  FIRE = 'Fire Incident',
+  DISASTER = 'Natural Disaster',
+  OTHER = 'General SOS'
+}
+
 export interface UserProfile {
   uid: string;
   email: string;
@@ -26,7 +34,7 @@ export interface Incident {
   id: string;
   reporterId: string;
   reporterName: string;
-  type: string;
+  type: EmergencyType;
   description: string;
   location: {
     latitude: number;
@@ -37,6 +45,16 @@ export interface Incident {
   assignedTanods: string[];
   createdAt: string;
   updatedAt: string;
+  aiGuidance?: string;
+}
+
+export interface SystemEvent {
+  id: string;
+  userId: string;
+  userName: string;
+  action: string;
+  details: string;
+  timestamp: string;
 }
 
 export interface Announcement {

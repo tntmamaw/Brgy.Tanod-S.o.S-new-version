@@ -5,9 +5,11 @@ import { collection, query, where, onSnapshot, updateDoc, doc, orderBy } from 'f
 import { db } from '@/src/lib/firebase';
 import { Incident, UserProfile } from '@/src/types';
 import { handleFirestoreError, OperationType } from '@/src/lib/error-handler';
-import { AlertCircle, CheckCircle, Navigation, MapPin, Shield, Activity } from 'lucide-react';
+import { CheckCircle, Navigation, Shield, Activity, Users, Map as MapIcon } from 'lucide-react';
 import { formatTimestamp, cn } from '@/src/lib/utils';
 import { motion, AnimatePresence } from 'motion/react';
+import { GlassCard } from './ui/GlassCard';
+import { StatusBadge } from './ui/StatusBadge';
 
 export function TanodDashboard() {
   const { user } = useAuth();
@@ -16,14 +18,12 @@ export function TanodDashboard() {
   const [location, setLocation] = useState<[number, number] | null>(null);
 
   useEffect(() => {
-    // Tracking
     let watchId: number;
     if ("geolocation" in navigator) {
       watchId = navigator.geolocation.watchPosition(async (pos) => {
         const newLoc = [pos.coords.latitude, pos.coords.longitude] as [number, number];
         setLocation(newLoc);
         
-        // Update user location in DB if authenticated
         if (user) {
           try {
             await updateDoc(doc(db, 'users', user.uid), {
@@ -48,12 +48,12 @@ export function TanodDashboard() {
     );
     const unsubIncidents = onSnapshot(qIncidents, (snapshot) => {
       setIncidents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Incident)));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'incidents'));
+    });
 
     const qTanods = query(collection(db, 'users'), where('role', '==', 'Tanod'));
     const unsubTanods = onSnapshot(qTanods, (snapshot) => {
       setTanods(snapshot.docs.map(doc => doc.data() as UserProfile));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'users'));
+    });
 
     return () => {
       if (watchId) navigator.geolocation.clearWatch(watchId);
@@ -87,96 +87,148 @@ export function TanodDashboard() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 sm:p-6 max-w-7xl mx-auto">
-      {/* Incidents Queue */}
-      <div className="lg:col-span-4 space-y-4 h-[700px] overflow-y-auto pr-2 custom-scrollbar">
-        <div className="bg-white p-4 rounded-xl sticky top-0 z-10 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center space-x-2">
-            <Activity className="w-5 h-5 text-red-600 animate-pulse" />
-            <h2 className="font-black text-lg tracking-tight uppercase">Emergency Queue</h2>
-          </div>
-          <span className="bg-red-100 text-red-700 px-2 py-0.5 rounded-full text-[10px] font-black uppercase">
-            {incidents.filter(i => i.status === 'Pending').length} Alert(s)
-          </span>
-        </div>
-
-        <AnimatePresence mode="popLayout">
-          {incidents.map((incident) => (
-            <motion.div
-              key={incident.id}
-              layout
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.8, opacity: 0 }}
-              className={cn(
-                "p-4 rounded-2xl border-2 transition-all shadow-lg",
-                incident.status === 'Pending' ? "bg-red-50 border-red-200" : "bg-blue-50 border-blue-200"
-              )}
-            >
-              <div className="flex justify-between items-start mb-2">
-                <span className={cn(
-                  "px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider",
-                  incident.status === 'Pending' ? "bg-red-600 text-white" : "bg-blue-600 text-white"
-                )}>
-                  {incident.status}
-                </span>
-                <span className="text-[10px] font-bold text-gray-500 uppercase">{formatTimestamp(incident.createdAt)}</span>
-              </div>
-              
-              <h3 className="font-black text-gray-900 text-lg leading-tight uppercase mb-1">{incident.type}</h3>
-              <p className="text-gray-600 text-sm mb-3">Reported by <span className="font-bold">{incident.reporterName}</span></p>
-              
-              <div className="flex space-x-2">
-                {incident.status === 'Pending' ? (
-                  <button 
-                    onClick={() => respondToIncident(incident)}
-                    className="flex-1 bg-red-600 hover:bg-red-700 text-white py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center space-x-2 transition-all shadow-md"
-                  >
-                    <Navigation className="w-4 h-4" />
-                    <span>Respond</span>
-                  </button>
-                ) : (
-                  <button 
-                    onClick={() => resolveIncident(incident)}
-                    className="flex-1 bg-green-600 hover:bg-green-700 text-white py-2 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center space-x-2 transition-all shadow-md"
-                  >
-                    <CheckCircle className="w-4 h-4" />
-                    <span>Resolve</span>
-                  </button>
-                )}
-              </div>
-              {incident.assignedTanods.length > 0 && (
-                <div className="mt-3 flex flex-wrap gap-1">
-                  {incident.assignedTanods.map((name, i) => (
-                    <span key={i} className="bg-white/60 text-[9px] px-1.5 py-0.5 rounded text-gray-700 font-bold border border-gray-100">
-                      👨‍✈️ {name}
-                    </span>
-                  ))}
-                </div>
-              )}
-            </motion.div>
-          ))}
-        </AnimatePresence>
-        
-        {incidents.length === 0 && (
-          <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-            <Shield className="w-12 h-12 mb-2 opacity-20" />
-            <p className="italic text-sm">No active alerts at this moment.</p>
-          </div>
-        )}
-      </div>
-
-      {/* Map Content */}
-      <div className="lg:col-span-8 h-[700px] space-y-4">
-        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 h-full flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-black text-lg tracking-tight uppercase">Operational Grid</h2>
-            <div className="bg-green-50 px-3 py-1 rounded-full border border-green-100 flex items-center space-x-2">
-              <span className="w-2 h-2 bg-green-500 rounded-full" />
-              <span className="text-[10px] font-black text-green-700 uppercase tracking-widest">Live: {tanods.filter(t => t.status === 'On Duty').length} Active Units</span>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+      {/* Top Stats Overview */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+        <GlassCard className="p-6 border-b-4 border-b-red-500">
+          <div className="flex justify-between items-start">
+            <div>
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Active Alerts</span>
+              <h3 className="text-3xl font-black text-gray-900 leading-none mt-1">
+                {incidents.filter(i => i.status === 'Pending').length}
+              </h3>
+            </div>
+            <div className="bg-red-50 p-2 rounded-xl">
+              <Activity className="w-6 h-6 text-red-600" />
             </div>
           </div>
-          <IncidentMap incidents={incidents} tanods={tanods} userLocation={location} />
+        </GlassCard>
+
+        <GlassCard className="p-6 border-b-4 border-b-blue-500">
+          <div className="flex justify-between items-start">
+            <div>
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Responders Live</span>
+              <h3 className="text-3xl font-black text-gray-900 leading-none mt-1">
+                {tanods.filter(t => t.status === 'On Duty').length}
+              </h3>
+            </div>
+            <div className="bg-blue-50 p-2 rounded-xl">
+              <Shield className="w-6 h-6 text-blue-600" />
+            </div>
+          </div>
+        </GlassCard>
+
+        <GlassCard className="p-6 border-b-4 border-b-green-500">
+          <div className="flex justify-between items-start">
+            <div>
+              <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">Personnel Status</span>
+              <h3 className="text-xl font-black text-green-600 leading-none mt-1 uppercase">Operational</h3>
+            </div>
+            <div className="bg-green-50 p-2 rounded-xl">
+              <Users className="w-6 h-6 text-green-600" />
+            </div>
+          </div>
+        </GlassCard>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Alerts Column */}
+        <div className="lg:col-span-4 space-y-6">
+          <div className="flex items-center justify-between mb-2 px-2">
+            <h2 className="font-black text-lg tracking-tight uppercase flex items-center space-x-2">
+              <Activity className="w-5 h-5 text-red-600" />
+              <span>Priority Stream</span>
+            </h2>
+          </div>
+          
+          <div className="space-y-4 max-h-[700px] overflow-y-auto pr-2 custom-scrollbar">
+            <AnimatePresence mode="popLayout">
+              {incidents.map((incident) => (
+                <motion.div
+                  key={incident.id}
+                  layout
+                  initial={{ opacity: 0, x: -20 }}
+                  animate={{ opacity: 1, x: 0 }}
+                  exit={{ opacity: 0, scale: 0.95 }}
+                >
+                  <GlassCard 
+                    variant={incident.status === 'Pending' ? 'danger' : 'default'}
+                    className="p-5 border-2"
+                  >
+                    <div className="flex justify-between items-start mb-4">
+                      <StatusBadge status={incident.status} />
+                      <span className="text-[10px] font-bold text-gray-400 uppercase">{formatTimestamp(incident.createdAt)}</span>
+                    </div>
+                    
+                    <h4 className="font-black text-gray-900 text-xl leading-tight uppercase mb-1">{incident.type}</h4>
+                    <p className="text-gray-500 text-sm mb-4">Reported by <span className="font-bold text-gray-900">{incident.reporterName}</span></p>
+                    
+                    {incident.aiGuidance && (
+                      <div className="mb-4 bg-white/50 p-3 rounded-xl border border-gray-100 italic text-[11px] text-gray-600">
+                        " {incident.aiGuidance.substring(0, 100)}... "
+                      </div>
+                    )}
+
+                    <div className="flex space-x-2">
+                      {incident.status === 'Pending' ? (
+                        <button 
+                          onClick={() => respondToIncident(incident)}
+                          className="flex-1 bg-red-600 hover:bg-red-700 text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center space-x-2 transition-all shadow-xl shadow-red-600/20"
+                        >
+                          <Navigation className="w-4 h-4" />
+                          <span>Dispatch Self</span>
+                        </button>
+                      ) : (
+                        <button 
+                          onClick={() => resolveIncident(incident)}
+                          className="flex-1 bg-green-600 hover:bg-green-700 text-white py-3 rounded-xl text-xs font-black uppercase tracking-widest flex items-center justify-center space-x-2 transition-all shadow-xl shadow-green-600/20"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                          <span>Mark Resolved</span>
+                        </button>
+                      )}
+                    </div>
+                    {incident.assignedTanods.length > 0 && (
+                      <div className="mt-4 pt-4 border-t border-gray-100/50 flex flex-wrap gap-2">
+                        {incident.assignedTanods.map((name, i) => (
+                          <span key={i} className="flex items-center space-x-1 bg-blue-50 text-blue-700 px-2 py-1 rounded-lg text-[10px] font-black uppercase border border-blue-100">
+                            <Shield className="w-3 h-3" />
+                            <span>{name}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                  </GlassCard>
+                </motion.div>
+              ))}
+            </AnimatePresence>
+
+            {incidents.length === 0 && (
+              <div className="text-center py-20 opacity-30">
+                <Shield className="w-16 h-16 mx-auto mb-4" />
+                <p className="font-black uppercase tracking-widest text-xs">All Zones Clear</p>
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Tactical Map Column */}
+        <div className="lg:col-span-8 h-[800px]">
+          <GlassCard className="h-full p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="font-black text-2xl tracking-tighter uppercase flex items-center space-x-2">
+                <MapIcon className="w-6 h-6 text-indigo-600" />
+                <span>Tactical Command</span>
+              </h2>
+              <div className="flex items-center space-x-2">
+                <span className="w-2 h-2 bg-blue-500 rounded-full animate-pulse" />
+                <span className="text-[10px] font-bold text-gray-500 uppercase tracking-widest">Satellite Link Stable</span>
+              </div>
+            </div>
+            <div className="flex-1 rounded-3xl overflow-hidden shadow-inner border border-gray-100">
+              <IncidentMap incidents={incidents} tanods={tanods} userLocation={location} />
+            </div>
+          </GlassCard>
         </div>
       </div>
     </div>

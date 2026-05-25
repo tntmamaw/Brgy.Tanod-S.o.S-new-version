@@ -2,13 +2,16 @@ import React, { useState, useEffect } from 'react';
 import { useAuth } from './AuthProvider';
 import { SOSButton } from './SOSButton';
 import { IncidentMap } from './IncidentMap';
-import { collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, addDoc, serverTimestamp, orderBy, limit, doc, updateDoc } from 'firebase/firestore';
 import { db } from '@/src/lib/firebase';
-import { Incident, UserProfile, Announcement } from '@/src/types';
+import { Incident, UserProfile, Announcement, EmergencyType } from '@/src/types';
 import { handleFirestoreError, OperationType } from '@/src/lib/error-handler';
-import { Newspaper, Send, ShieldCheck, Clock } from 'lucide-react';
+import { Newspaper, ShieldCheck, Clock, BrainCircuit, History } from 'lucide-react';
 import { formatTimestamp } from '@/src/lib/utils';
-import { motion } from 'motion/react';
+import { motion, AnimatePresence } from 'motion/react';
+import { GlassCard } from './ui/GlassCard';
+import { StatusBadge } from './ui/StatusBadge';
+import { queueIncident } from '@/src/lib/sync';
 
 export function ResidentDashboard() {
   const { user } = useAuth();
@@ -16,148 +19,226 @@ export function ResidentDashboard() {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [tanods, setTanods] = useState<UserProfile[]>([]);
   const [location, setLocation] = useState<[number, number] | null>(null);
-  const [isReporting, setIsReporting] = useState(false);
+  const [recentSOS, setRecentSOS] = useState<Incident | null>(null);
 
   useEffect(() => {
-    // Get user location
     if ("geolocation" in navigator) {
       navigator.geolocation.getCurrentPosition((pos) => {
         setLocation([pos.coords.latitude, pos.coords.longitude]);
       });
     }
 
-    // Subscribe to active incidents (last 24h)
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    const qIncidents = query(
-      collection(db, 'incidents'),
-      where('createdAt', '>=', yesterday)
-    );
+    const qIncidents = query(collection(db, 'incidents'), where('createdAt', '>=', yesterday));
     const unsubIncidents = onSnapshot(qIncidents, (snapshot) => {
-      setIncidents(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Incident)));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'incidents'));
+      const data = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Incident));
+      setIncidents(data);
+      
+      // Check for user's own active SOS
+      if (user) {
+        const myActive = data.find(i => i.reporterId === user.uid && i.status !== 'Resolved');
+        setRecentSOS(myActive || null);
+      }
+    });
 
-    // Subscribe to announcements
-    const qAnnouncements = query(
-      collection(db, 'announcements'),
-      orderBy('createdAt', 'desc'),
-      limit(5)
-    );
+    const qAnnouncements = query(collection(db, 'announcements'), orderBy('createdAt', 'desc'), limit(5));
     const unsubAnnouncements = onSnapshot(qAnnouncements, (snapshot) => {
       setAnnouncements(snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Announcement)));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'announcements'));
+    });
 
-    // Subscribe to active Tanods
-    const qTanods = query(
-      collection(db, 'users'),
-      where('role', '==', 'Tanod'),
-      where('status', '==', 'On Duty')
-    );
+    const qTanods = query(collection(db, 'users'), where('role', '==', 'Tanod'), where('status', '==', 'On Duty'));
     const unsubTanods = onSnapshot(qTanods, (snapshot) => {
       setTanods(snapshot.docs.map(doc => doc.data() as UserProfile));
-    }, error => handleFirestoreError(error, OperationType.LIST, 'users'));
+    });
 
     return () => {
       unsubIncidents();
       unsubAnnouncements();
       unsubTanods();
     };
-  }, []);
+  }, [user]);
 
-  const handleSOS = async () => {
+  const [showCategories, setShowCategories] = useState(false);
+  const [isSyncing, setIsSyncing] = useState(false);
+
+  const handleSOSTrigger = () => {
+    setShowCategories(true);
+  };
+
+  const executeSOS = async (type: EmergencyType) => {
     if (!user || !location) return;
+    setShowCategories(false);
     
+    const description = `Emergency: ${type}. Please respond immediately.`;
+
+    const incidentData = {
+      reporterId: user.uid,
+      reporterName: user.displayName,
+      type: type,
+      description,
+      location: { latitude: location[0], longitude: location[1] },
+      status: 'Pending' as const,
+      assignedTanods: [],
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString()
+    };
+
     try {
-      await addDoc(collection(db, 'incidents'), {
-        reporterId: user.uid,
-        reporterName: user.displayName,
-        type: 'SOS ALERT',
-        description: 'Auto-generated SOS from emergency button.',
-        location: {
-          latitude: location[0],
-          longitude: location[1]
-        },
-        status: 'Pending',
-        assignedTanods: [],
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString()
-      });
-      // Voice feedback (Web Speech API)
-      const utterance = new SpeechSynthesisUtterance("SOS Alert sent. Help is on the way. Please stay where you are.");
-      utterance.lang = 'en-US';
-      window.speechSynthesis.speak(utterance);
+      if (navigator.onLine) {
+        const docRef = await addDoc(collection(db, 'incidents'), incidentData);
+        fetch('/api/gemini/sos-guide', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ type, description })
+        }).then(res => res.json()).then(data => {
+          if (data.guidance) {
+            updateDoc(doc(db, 'incidents', docRef.id), { aiGuidance: data.guidance });
+            const utterance = new SpeechSynthesisUtterance(data.guidance);
+            utterance.lang = 'en-US';
+            window.speechSynthesis.speak(utterance);
+          }
+        });
+      } else {
+        queueIncident(incidentData);
+        const utterance = new SpeechSynthesisUtterance("You are offline. SOS alert has been queued.");
+        window.speechSynthesis.speak(utterance);
+      }
     } catch (error) {
       handleFirestoreError(error, OperationType.CREATE, 'incidents');
     }
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 p-4 sm:p-6 pb-32 max-w-7xl mx-auto">
-      {/* Map Column */}
-      <div className="lg:col-span-8 h-[500px] lg:h-[700px]">
-        <div className="bg-white p-4 rounded-2xl shadow-sm border border-gray-100 h-full flex flex-col">
-          <div className="flex items-center justify-between mb-4">
-            <h2 className="font-black text-lg tracking-tight uppercase">Emergency Radar</h2>
-            <div className="flex items-center space-x-2">
-              <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse" />
-              <span className="text-xs font-bold text-gray-500 uppercase tracking-widest">{tanods.length} Tanods On Duty</span>
-            </div>
-          </div>
-          <IncidentMap 
-            incidents={incidents} 
-            tanods={tanods} 
-            userLocation={location} 
-          />
-        </div>
-      </div>
+    <div className="max-w-7xl mx-auto px-4 py-8 space-y-8">
+      {/* Category Selection Modal/Overlay */}
+      <AnimatePresence>
+        {showCategories && (
+          <motion.div 
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className="fixed inset-0 z-[100] flex items-center justify-center p-6 bg-gray-900/60 backdrop-blur-md"
+          >
+            <GlassCard className="max-w-md w-full p-8 border-red-500/20 shadow-2xl">
+              <h3 className="font-black text-2xl text-center uppercase tracking-tighter mb-6">Select Emergency Type</h3>
+              <div className="grid grid-cols-1 gap-3">
+                {Object.values(EmergencyType).map((type) => (
+                  <button
+                    key={type}
+                    onClick={() => executeSOS(type)}
+                    className="w-full py-4 px-6 rounded-2xl bg-gray-50 hover:bg-red-600 hover:text-white transition-all text-left font-black uppercase text-xs tracking-widest border border-gray-100 flex items-center justify-between group"
+                  >
+                    <span>{type}</span>
+                    <History className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                  </button>
+                ))}
+                <button 
+                  onClick={() => setShowCategories(false)}
+                  className="mt-4 text-[10px] font-black uppercase text-gray-400 hover:text-gray-600 tracking-[0.2em]"
+                >
+                  Cancel Protocol
+                </button>
+              </div>
+            </GlassCard>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Sidebar Column */}
-      <div className="lg:col-span-4 space-y-6">
-        {/* Info Card */}
-        <div className="bg-indigo-900 rounded-2xl p-6 text-white shadow-xl">
-          <h2 className="font-black text-2xl tracking-tighter mb-2">SAFE ZONE</h2>
-          <p className="text-indigo-200 text-sm leading-relaxed mb-4">
-            You are currently in a monitored zone. Use the SOS button only for life-threatening emergencies.
-          </p>
-          <div className="flex space-x-2">
-            <div className="bg-indigo-800 p-3 rounded-xl flex-1 flex flex-col items-center">
-              <ShieldCheck className="w-6 h-6 mb-1 text-green-400" />
-              <span className="text-[10px] uppercase font-bold text-indigo-300">Active protection</span>
+      {/* Hero Section */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-8">
+        {/* Map Area */}
+        <motion.div 
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="lg:col-span-8 h-[600px] relative"
+        >
+          <GlassCard className="h-full p-6 flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <div>
+                <h2 className="font-black text-2xl tracking-tighter uppercase text-gray-900 leading-none">Emergency Grid</h2>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest mt-1 inline-block">Real-time Telemetry Active</span>
+              </div>
+              <div className="bg-green-50 px-4 py-2 rounded-2xl border border-green-100 flex items-center space-x-3">
+                <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
+                <span className="text-xs font-black text-green-700 uppercase tracking-widest">{tanods.length} Responders On Grid</span>
+              </div>
             </div>
-            <div className="bg-indigo-800 p-3 rounded-xl flex-1 flex flex-col items-center">
-              <Clock className="w-6 h-6 mb-1 text-blue-400" />
-              <span className="text-[10px] uppercase font-bold text-indigo-300">24/7 Response</span>
+            <div className="flex-1 rounded-3xl overflow-hidden border border-gray-100 shadow-inner">
+              <IncidentMap incidents={incidents} tanods={tanods} userLocation={location} />
             </div>
-          </div>
-        </div>
+          </GlassCard>
+        </motion.div>
 
-        {/* Announcements */}
-        <div className="bg-white rounded-2xl p-6 border border-gray-100 shadow-sm">
-          <div className="flex items-center space-x-2 mb-4 border-b border-gray-50 pb-4">
-            <Newspaper className="w-5 h-5 text-indigo-600" />
-            <h2 className="font-black text-lg tracking-tight uppercase">Barangay News</h2>
-          </div>
-          <div className="space-y-4 max-h-[400px] overflow-y-auto pr-2">
-            {announcements.map((news) => (
-              <motion.div 
-                key={news.id}
-                initial={{ opacity: 0, x: -10 }}
-                animate={{ opacity: 1, x: 0 }}
-                className="group cursor-pointer"
+        {/* Sidebar */}
+        <div className="lg:col-span-4 space-y-6">
+          {/* Active Guidance Card */}
+          <AnimatePresence>
+            {recentSOS && (
+              <motion.div
+                initial={{ opacity: 0, scale: 0.9 }}
+                animate={{ opacity: 1, scale: 1 }}
+                exit={{ opacity: 0, scale: 0.9 }}
               >
-                <p className="text-xs font-bold text-indigo-600 mb-1">{formatTimestamp(news.createdAt)}</p>
-                <h3 className="font-bold text-gray-900 group-hover:text-indigo-600 transition-colors">{news.title}</h3>
-                <p className="text-sm text-gray-500 line-clamp-2 mt-1">{news.content}</p>
-                <hr className="mt-4 border-gray-50" />
+                <GlassCard variant="danger" className="p-6 border-red-200">
+                  <div className="flex items-center space-x-3 mb-4">
+                    <div className="bg-red-600 p-2 rounded-xl shadow-lg shadow-red-600/20">
+                      <BrainCircuit className="w-5 h-5 text-white" />
+                    </div>
+                    <h3 className="font-black text-lg tracking-tight uppercase text-red-700">AI Guard Guidance</h3>
+                  </div>
+                  <div className="bg-white/60 p-4 rounded-2xl text-sm text-red-900 leading-relaxed font-medium italic">
+                    {recentSOS.aiGuidance || "Analyzing emergency situation... stay calm."}
+                  </div>
+                  <div className="mt-4 flex items-center justify-between">
+                    <StatusBadge status={recentSOS.status} />
+                    <span className="text-[10px] font-bold text-red-400 uppercase tracking-widest">Responders incoming</span>
+                  </div>
+                </GlassCard>
               </motion.div>
-            ))}
-            {announcements.length === 0 && (
-              <p className="text-center text-gray-400 py-10 italic text-sm">No recent announcements.</p>
             )}
-          </div>
+          </AnimatePresence>
+
+          {/* Quick Stats */}
+          <GlassCard className="p-6">
+            <h3 className="font-black text-lg tracking-tight uppercase mb-6 flex items-center space-x-2">
+              <ShieldCheck className="w-5 h-5 text-indigo-600" />
+              <span>Zone Security</span>
+            </h3>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                <span className="block text-2xl font-black text-gray-900">2.4m</span>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Avg Response</span>
+              </div>
+              <div className="bg-gray-50 p-4 rounded-2xl border border-gray-100">
+                <span className="block text-2xl font-black text-gray-900">24/7</span>
+                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Monitoring</span>
+              </div>
+            </div>
+          </GlassCard>
+
+          {/* Announcements */}
+          <GlassCard className="p-6">
+            <h3 className="font-black text-lg tracking-tight uppercase mb-6 flex items-center space-x-2">
+              <Newspaper className="w-5 h-5 text-indigo-600" />
+              <span>Official Bulletins</span>
+            </h3>
+            <div className="space-y-6 max-h-[300px] overflow-y-auto pr-2">
+              {announcements.map((news) => (
+                <div key={news.id} className="relative pl-4 border-l-2 border-indigo-100 group">
+                  <div className="absolute -left-[5px] top-0 w-2 h-2 rounded-full bg-indigo-200 group-hover:bg-indigo-600 transition-colors" />
+                  <span className="text-[10px] font-bold text-indigo-500 uppercase tracking-widest mb-1 block">
+                    {formatTimestamp(news.createdAt)}
+                  </span>
+                  <h4 className="font-bold text-gray-900 leading-tight mb-1">{news.title}</h4>
+                  <p className="text-xs text-gray-500 line-clamp-2">{news.content}</p>
+                </div>
+              ))}
+            </div>
+          </GlassCard>
         </div>
       </div>
 
-      <SOSButton onTrigger={handleSOS} />
+      <SOSButton onTrigger={handleSOSTrigger} disabled={!!recentSOS} />
     </div>
   );
 }
